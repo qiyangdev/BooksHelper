@@ -25,20 +25,29 @@ struct BooksTranslationTests {
         #expect(NSApp.sendAction(action, to: picker.target, from: picker))
         #expect(translation.output == .summary("Summary fixture"))
         view.layout()
-        let summary = view.subviews.compactMap { $0 as? NSScrollView }.first { !$0.isHidden }
-        #expect((summary?.documentView as? NSTextView)?.string == "Summary fixture")
-        let text = try #require(summary?.documentView as? NSTextView)
+        let summary = try #require(view.subviews.compactMap { $0 as? NSScrollView }.first { !$0.isHidden })
+        #expect(picker.frame.minY - summary.frame.maxY == 16)
+        let text = try #require(summary.documentView as? NSTextView)
+        #expect(text.string == "Summary fixture")
         view.show(.summarizing)
         view.layout()
-        #expect(text.string == "Summarizing…")
-        #expect(text.textColor == .secondaryLabelColor)
+        let placeholder = try #require(summary.documentView?.subviews.compactMap { $0 as? NSTextView }.first)
+        #expect(placeholder.string == "Summarizing…")
+        #expect(placeholder.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .secondaryLabelColor)
+        #expect(picker.frame.minY - summary.frame.maxY == 16)
         view.show(.summary("First"))
         view.layout()
+        #expect(summary.documentView === text)
         #expect(text.string == "First")
         #expect(text.textColor == .labelColor)
         view.show(.summary("First sentence."))
         view.layout()
         #expect(text.string == "First sentence.")
+        let storage = try #require(text.textStorage)
+        for index in [0, storage.length - 1] {
+            let paragraph = storage.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle
+            #expect(paragraph?.lineHeightMultiple == 1.25)
+        }
         picker.selectedSegment = BooksSidebarMode.translation.rawValue
         #expect(NSApp.sendAction(action, to: picker.target, from: picker))
         #expect(translation.output == .paragraphs([

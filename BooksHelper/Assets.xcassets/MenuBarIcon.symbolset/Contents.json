@@ -1,12 +1,12 @@
 {
-  "symbols" : [
-    {
-      "filename" : "custom.book.fill.badge.gearshape.svg",
-      "idiom" : "universal"
-    }
-  ],
   "info" : {
     "author" : "xcode",
     "version" : 1
-  }
+  },
+  "symbols" : [
+    {
+      "filename" : "custom.book.fill.badge.sparkles.svg",
+      "idiom" : "universal"
+    }
+  ]
 }

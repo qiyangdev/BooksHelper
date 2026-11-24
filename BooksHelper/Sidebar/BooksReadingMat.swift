@@ -5,9 +5,17 @@ import SwiftUI
 final class BooksReadingMat: NSView {
     private static let textInset: CGFloat = 16
     private static let toolbarHeight: CGFloat = 33
+    private static let summaryTopSpacing: CGFloat = 16
+    private static let summaryTextAttributes: [NSAttributedString.Key: Any] = {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineHeightMultiple = 1.25
+        return [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]
+    }()
 
     private let reader = NSScrollView()
     private let summaryReader = NSTextView.scrollableTextView()
+    private let summaryPlaceholder = BooksParagraphDocument()
+    private var summaryTextView: NSTextView?
     private let modePicker = BooksModePicker(labels: ["Translate", "Summary"], trackingMode: .selectOne, target: nil, action: nil)
     private let document = BooksParagraphDocument()
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
@@ -62,10 +70,12 @@ final class BooksReadingMat: NSView {
         summaryReader.drawsBackground = false
         summaryReader.isHidden = true
         if let summary = summaryReader.documentView as? NSTextView {
+            summaryTextView = summary
             summary.drawsBackground = false
             summary.isEditable = false
             summary.isRichText = false
             summary.font = .systemFont(ofSize: 14)
+            summary.textColor = .labelColor
             summary.textContainerInset = .zero
             summary.textContainer?.lineFragmentPadding = 0
         }
@@ -131,6 +141,8 @@ final class BooksReadingMat: NSView {
         )
         summaryReader.isHidden = true
         let showsToolbar = rightWidth >= BooksSidebarGeometry.minimumExpandedRightWidth && content != nil && !textFrame.isEmpty
+        let isSummaryLoading = content == .summarizing || (content == .loading && mode == .summary)
+        if !showsToolbar || !isSummaryLoading { summaryPlaceholder.stopShimmer() }
         modePicker.isHidden = !showsToolbar
         if showsToolbar {
             let size = modePicker.fittingSize
@@ -155,11 +167,11 @@ final class BooksReadingMat: NSView {
         }
         unavailableView?.isHidden = true
         if case .summary(let text) = content {
-            showSummary(text, in: textFrame, isPlaceholder: false)
+            showSummary(text, in: textFrame)
             return
         }
-        if content == .summarizing || (content == .loading && mode == .summary) {
-            showSummary(String(localized: "Summarizing…"), in: textFrame, isPlaceholder: true)
+        if isSummaryLoading {
+            showSummary(nil, in: textFrame)
             return
         }
         guard case .paragraphs(let paragraphs) = content else {
@@ -182,27 +194,38 @@ final class BooksReadingMat: NSView {
         reader.isHidden = false
     }
 
-    private func showSummary(_ text: String, in frame: CGRect, isPlaceholder: Bool) {
+    private func showSummary(_ text: String?, in frame: CGRect) {
         document.stopShimmer()
         reader.isHidden = true
         statusLabel.isHidden = true
         setLoadingIndicatorVisible(false)
-        summaryReader.frame = frame
-        if let summary = summaryReader.documentView as? NSTextView {
-            let color: NSColor = isPlaceholder ? .secondaryLabelColor : .labelColor
-            if summary.string != text || summary.textColor != color {
-                let extendsSummary = !isPlaceholder && summary.textColor == color && text.hasPrefix(summary.string)
-                if extendsSummary, let storage = summary.textStorage {
+        let top = min(frame.maxY, modePicker.frame.minY - Self.summaryTopSpacing)
+        summaryReader.frame = CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: max(0, top - frame.minY))
+        if let text, let summary = summaryTextView {
+            if summaryReader.documentView !== summary {
+                summaryReader.documentView = summary
+                summaryReader.contentView.scroll(to: .zero)
+            }
+            if summary.string != text, let storage = summary.textStorage {
+                let extendsSummary = text.hasPrefix(summary.string)
+                if extendsSummary {
                     let suffix = String(text.dropFirst(summary.string.count))
-                    storage.append(NSAttributedString(string: suffix, attributes: [
-                        .font: NSFont.systemFont(ofSize: 14), .foregroundColor: color,
-                    ]))
+                    storage.append(NSAttributedString(string: suffix, attributes: Self.summaryTextAttributes))
                 } else {
-                    summary.string = text
-                    summary.textColor = color
+                    storage.setAttributedString(NSAttributedString(string: text, attributes: Self.summaryTextAttributes))
                     summaryReader.contentView.scroll(to: .zero)
                 }
             }
+        } else if text == nil {
+            if summaryReader.documentView !== summaryPlaceholder {
+                summaryReader.documentView = summaryPlaceholder
+                summaryReader.contentView.scroll(to: .zero)
+            }
+            let viewport = summaryReader.contentSize
+            var placeholder = BooksParagraph(text: String(localized: "Summarizing…"), top: 0, height: viewport.height)
+            placeholder.isTranslationPlaceholder = true
+            placeholder.showsTranslationShimmer = true
+            _ = summaryPlaceholder.show([placeholder], viewport: viewport, topOffset: 0)
         }
         summaryReader.isHidden = false
     }
