@@ -1,16 +1,24 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 final class BooksReadingMat: NSView {
     private static let textInset: CGFloat = 16
+    private static let toolbarHeight: CGFloat = 33
 
     private let reader = NSScrollView()
+    private let summaryReader = NSTextView.scrollableTextView()
+    private let modePicker = BooksModePicker(labels: ["Translate", "Summary"], trackingMode: .selectOne, target: nil, action: nil)
     private let document = BooksParagraphDocument()
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let loadingIndicator = NSProgressIndicator()
     private let edge = BooksReadingMatEdge()
     private let backdropMask = CALayer()
     private var content: BooksPageContent?
+    private var unavailableView: TranslationUnavailableHostingView?
+    var onRetryTranslation: (() -> Void)?
+    var onSelectMode: ((BooksSidebarMode) -> Void)?
+    private var mode: BooksSidebarMode = .translation
     var onResize: ((CGFloat) -> Void)? {
         get { edge.onResize }
         set { edge.onResize = newValue }
@@ -51,6 +59,22 @@ final class BooksReadingMat: NSView {
         reader.verticalScrollElasticity = .none
         reader.isHidden = true
         reader.documentView = document
+        summaryReader.drawsBackground = false
+        summaryReader.isHidden = true
+        if let summary = summaryReader.documentView as? NSTextView {
+            summary.drawsBackground = false
+            summary.isEditable = false
+            summary.isRichText = false
+            summary.font = .systemFont(ofSize: 14)
+            summary.textContainerInset = .zero
+            summary.textContainer?.lineFragmentPadding = 0
+        }
+        modePicker.target = self
+        modePicker.action = #selector(selectSidebarMode(_:))
+        modePicker.selectedSegment = BooksSidebarMode.translation.rawValue
+        modePicker.segmentStyle = .automatic
+        modePicker.setAccessibilityLabel("Sidebar Mode")
+        modePicker.isHidden = true
         statusLabel.alignment = .center
         statusLabel.font = .systemFont(ofSize: 14)
         statusLabel.textColor = .labelColor
@@ -66,8 +90,10 @@ final class BooksReadingMat: NSView {
         edge.setAccessibilityRole(.splitter)
         edge.setAccessibilityLabel("Resize Reading Area")
         addSubview(reader)
+        addSubview(summaryReader)
         addSubview(statusLabel)
         addSubview(loadingIndicator)
+        addSubview(modePicker)
         addSubview(edge)
     }
 
@@ -98,17 +124,46 @@ final class BooksReadingMat: NSView {
         let edgeWidth = min(BooksSidebarGeometry.margin, bounds.width)
         edge.frame = CGRect(x: bounds.maxX - edgeWidth, y: bounds.minY, width: edgeWidth, height: bounds.height)
         let textInset = Self.textInset
+        let toolbarHeight = Self.toolbarHeight
         let textFrame = CGRect(
             x: bounds.minX + textInset, y: bounds.minY + textInset,
-            width: max(0, bounds.width - 2 * textInset), height: max(0, bounds.height - 2 * textInset)
+            width: max(0, bounds.width - 2 * textInset), height: max(0, bounds.height - 2 * textInset - toolbarHeight)
         )
+        summaryReader.isHidden = true
+        let showsToolbar = rightWidth >= BooksSidebarGeometry.minimumExpandedRightWidth && content != nil && !textFrame.isEmpty
+        modePicker.isHidden = !showsToolbar
+        if showsToolbar {
+            let size = modePicker.fittingSize
+            modePicker.frame = CGRect(x: bounds.midX - size.width / 2, y: textFrame.maxY + 4, width: size.width, height: size.height)
+        }
         guard rightWidth >= BooksSidebarGeometry.minimumExpandedRightWidth, let content, !textFrame.isEmpty else {
+            document.stopShimmer()
             reader.isHidden = true
             statusLabel.isHidden = true
+            unavailableView?.isHidden = true
             setLoadingIndicatorVisible(false)
             return
         }
+        if case .translationUnavailable = content {
+            document.stopShimmer()
+            reader.isHidden = true
+            statusLabel.isHidden = true
+            setLoadingIndicatorVisible(false)
+            unavailableView?.frame = textFrame
+            unavailableView?.isHidden = false
+            return
+        }
+        unavailableView?.isHidden = true
+        if case .summary(let text) = content {
+            showSummary(text, in: textFrame, isPlaceholder: false)
+            return
+        }
+        if content == .summarizing || (content == .loading && mode == .summary) {
+            showSummary(String(localized: "Summarizing…"), in: textFrame, isPlaceholder: true)
+            return
+        }
         guard case .paragraphs(let paragraphs) = content else {
+            document.stopShimmer()
             reader.isHidden = true
             showStatus(content, in: textFrame)
             return
@@ -118,7 +173,7 @@ final class BooksReadingMat: NSView {
         setLoadingIndicatorVisible(false)
         if reader.frame != textFrame { reader.frame = textFrame }
         let changedText = document.show(
-            paragraphs, viewport: textFrame.size, topOffset: outerMargin - textInset
+            paragraphs, viewport: textFrame.size, topOffset: outerMargin - textInset - toolbarHeight
         )
         if changedText {
             reader.contentView.scroll(to: .zero)
@@ -127,9 +182,56 @@ final class BooksReadingMat: NSView {
         reader.isHidden = false
     }
 
+    private func showSummary(_ text: String, in frame: CGRect, isPlaceholder: Bool) {
+        document.stopShimmer()
+        reader.isHidden = true
+        statusLabel.isHidden = true
+        setLoadingIndicatorVisible(false)
+        summaryReader.frame = frame
+        if let summary = summaryReader.documentView as? NSTextView {
+            let color: NSColor = isPlaceholder ? .secondaryLabelColor : .labelColor
+            if summary.string != text || summary.textColor != color {
+                let extendsSummary = !isPlaceholder && summary.textColor == color && text.hasPrefix(summary.string)
+                if extendsSummary, let storage = summary.textStorage {
+                    let suffix = String(text.dropFirst(summary.string.count))
+                    storage.append(NSAttributedString(string: suffix, attributes: [
+                        .font: NSFont.systemFont(ofSize: 14), .foregroundColor: color,
+                    ]))
+                } else {
+                    summary.string = text
+                    summary.textColor = color
+                    summaryReader.contentView.scroll(to: .zero)
+                }
+            }
+        }
+        summaryReader.isHidden = false
+    }
+
+    @objc private func selectSidebarMode(_ picker: NSSegmentedControl) {
+        guard let mode = BooksSidebarMode(rawValue: picker.selectedSegment), mode != self.mode else { return }
+        self.mode = mode
+        needsLayout = true
+        onSelectMode?(mode)
+    }
+
     func show(_ content: BooksPageContent?) {
         guard self.content != content else { return }
         self.content = content
+        if case .translationUnavailable(let message) = content {
+            let title: LocalizedStringKey = mode == .summary ? "Summary Unavailable" : "Translation Unavailable"
+            let root = TranslationUnavailableView(title: title, message: message) { [weak self] in
+                self?.onRetryTranslation?()
+            }
+            if let unavailableView {
+                unavailableView.rootView = root
+            } else {
+                let view = TranslationUnavailableHostingView(rootView: root)
+                view.sizingOptions = []
+                view.isHidden = true
+                addSubview(view, positioned: .below, relativeTo: edge)
+                unavailableView = view
+            }
+        }
         needsLayout = true
     }
 
@@ -137,16 +239,13 @@ final class BooksReadingMat: NSView {
         let text: String
         let isLoading: Bool
         switch content {
-        case .loading, .translating:
-            text = String(localized: "Translating…")
+        case .loading:
+            text = mode == .summary ? String(localized: "Summarizing…") : String(localized: "Translating…")
             isLoading = true
         case .noText:
             text = String(localized: "No readable text on this page.")
             isLoading = false
-        case .translationUnavailable(let message):
-            text = message
-            isLoading = false
-        case .paragraphs:
+        case .translationUnavailable, .paragraphs, .summary, .summarizing:
             return
         }
         if statusLabel.stringValue != text { statusLabel.stringValue = text }
@@ -179,76 +278,28 @@ final class BooksReadingMat: NSView {
     }
 }
 
-private final class BooksParagraphDocument: NSView {
-    private var paragraphViews: [[NSTextView]] = []
+private final class BooksModePicker: NSSegmentedControl {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
 
-    override var isFlipped: Bool { true }
+private struct TranslationUnavailableView: View {
+    let title: LocalizedStringKey
+    let message: String
+    let onRetry: () -> Void
 
-    func show(_ paragraphs: [BooksParagraph], viewport: CGSize, topOffset: CGFloat) -> Bool {
-        let texts = paragraphs.map { paragraph in
-            // Let the sidebar width determine line breaks within each retained paragraph.
-            return paragraph.text.components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: " ")
+    var body: some View {
+        ContentUnavailableView {
+            Label(title, systemImage: "exclamationmark.triangle")
+        } description: {
+            Text(verbatim: message)
+        } actions: {
+            Button("Retry", action: onRetry)
         }
-        let viewCounts = paragraphs.map { $0.continuation == nil ? 1 : 2 }
-        let changedText = paragraphViews.compactMap { $0.first?.string } != texts
-            || paragraphViews.map(\.count) != viewCounts
-        if changedText {
-            for view in paragraphViews.joined() { view.removeFromSuperview() }
-            paragraphViews = zip(texts, viewCounts).map { makeTextViews($0, count: $1) }
-            for view in paragraphViews.joined() { addSubview(view) }
-        }
-
-        let usesTwoColumns = paragraphs.contains { $0.position.column == .right || $0.continuation != nil }
-        let gutter: CGFloat = 24
-        let columnWidth = usesTwoColumns ? max(0, (viewport.width - gutter) / 2) : viewport.width
-        var nextTop: [BooksParagraph.Column: CGFloat] = [:]
-        for (paragraph, views) in zip(paragraphs, paragraphViews) {
-            let positions = [paragraph.position] + (paragraph.continuation.map { [$0] } ?? [])
-            for (position, view) in zip(positions, views) {
-                guard let container = view.textContainer else { continue }
-                let top = max(nextTop[position.column, default: 0], position.top + topOffset)
-                let height = max(0, min(position.height, viewport.height - top))
-                let containerSize = CGSize(width: columnWidth, height: height)
-                if container.containerSize != containerSize { container.containerSize = containerSize }
-                let x = position.column == .left ? 0 : columnWidth + gutter
-                let frame = CGRect(x: x, y: top, width: columnWidth, height: height)
-                if view.frame != frame { view.frame = frame }
-                nextTop[position.column] = frame.maxY
-            }
-        }
-        if frame.size != viewport { setFrameSize(viewport) }
-        return changedText
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    private func makeTextViews(_ text: String, count: Int) -> [NSTextView] {
-        let storage = NSTextStorage()
-        let layout = NSLayoutManager()
-        storage.addLayoutManager(layout)
-
-        let views = (0..<count).map { index in
-            let container = NSTextContainer()
-            container.widthTracksTextView = false
-            container.heightTracksTextView = false
-            container.lineFragmentPadding = 0
-            container.lineBreakMode = index == count - 1 ? .byTruncatingTail : .byWordWrapping
-            layout.addTextContainer(container)
-            let view = NSTextView(frame: .zero, textContainer: container)
-            view.wantsLayer = true
-            view.layer?.masksToBounds = true
-            view.drawsBackground = false
-            view.isEditable = false
-            view.isSelectable = false
-            view.isVerticallyResizable = false
-            view.textContainerInset = .zero
-            return view
-        }
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        storage.setAttributedString(NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 14),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: paragraph,
-        ]))
-        return views
-    }
+private final class TranslationUnavailableHostingView: NSHostingView<TranslationUnavailableView> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func shouldDelayWindowOrdering(for event: NSEvent) -> Bool { true }
 }

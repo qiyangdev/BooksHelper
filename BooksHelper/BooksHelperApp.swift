@@ -26,8 +26,9 @@ final class BooksHelperApp: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStatusItem()
 #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-fixture") {
-            companion.startForUITests()
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--ui-test-fixture") {
+            companion.startForUITests(translationFailsOnce: arguments.contains("--ui-test-translation-failure"))
             return
         }
 #endif

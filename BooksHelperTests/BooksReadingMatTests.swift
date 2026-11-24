@@ -30,7 +30,7 @@ struct BooksReadingMatTests {
         #expect(expandedEdge === collapsedEdge)
         #expect(view.hasRoomForText)
         #expect(!reader.isHidden)
-        #expect(reader.frame == view.bounds.insetBy(dx: 16, dy: 16))
+        #expect(reader.frame == CGRect(x: 16, y: 16, width: 288, height: 451))
         #expect(reader.frame.maxX < expandedEdge.frame.minX)
         #expect((reader.documentView?.subviews.first as? NSTextView)?.string == "Current Books page")
 
@@ -71,7 +71,7 @@ struct BooksReadingMatTests {
 
         view.show(.paragraphs([BooksParagraph(text: "Previous translation", top: 0, height: 50)]))
         view.layout()
-        view.show(.translating)
+        view.show(.loading)
         view.layout()
         #expect(reader.isHidden)
         #expect(!status.isHidden)
@@ -81,19 +81,12 @@ struct BooksReadingMatTests {
         #expect(!indicator.isHidden)
         #expect(indicator.style == .spinning && indicator.isIndeterminate)
         #expect(indicator.frame.midX == view.bounds.midX)
-        #expect(status.frame.union(indicator.frame).midY == view.bounds.midY)
-        let loadingHeight = status.frame.height
-
-        let message = "The required language packs aren’t ready. Try again after downloading them."
-        view.show(.translationUnavailable(message))
+        #expect(status.frame.union(indicator.frame).midY == view.bounds.midY - 16.5)
+        view.show(.translationUnavailable("The required language packs aren’t ready."))
         view.layout()
         #expect(reader.isHidden)
-        #expect(!status.isHidden)
+        #expect(status.isHidden)
         #expect(indicator.isHidden)
-        #expect(status.stringValue == message)
-        #expect(status.frame.height > loadingHeight)
-        #expect(status.frame.midX == view.bounds.midX)
-        #expect(status.frame.midY == view.bounds.midY)
 
         view.show(.paragraphs([BooksParagraph(text: "Current translation", top: 0, height: 50)]))
         view.layout()
@@ -118,14 +111,123 @@ struct BooksReadingMatTests {
 
         let blocks = document.subviews.compactMap { $0 as? NSTextView }
         try #require(blocks.count == 3)
-        #expect(blocks[0].frame.minY == 40)
+        #expect(blocks[0].frame.minY == 7)
         #expect(blocks[0].frame.height == 35)
-        #expect(blocks[1].frame.minY == 88)
+        #expect(blocks[1].frame.minY == 55)
         #expect(blocks[1].frame.height == 24)
-        #expect(blocks[2].frame.minY == 116)
+        #expect(blocks[2].frame.minY == 83)
         #expect(blocks[2].frame.minY >= blocks[1].frame.maxY)
         #expect(document.frame.height >= blocks[2].frame.maxY)
         #expect(document.frame.height == reader.contentSize.height)
+    }
+
+    @Test func replacingAPlaceholderKeepsBothColumnsInPlace() throws {
+        let view = BooksReadingMat(frame: CGRect(x: 0, y: 0, width: 640, height: 200))
+        view.rightWidth = 640
+        let reader = try #require(view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let document = try #require(reader.documentView)
+        var paragraphs = [
+            BooksParagraph(text: "First paragraph", top: 20, height: 40),
+            BooksParagraph(text: "Second paragraph", top: 48, height: 40, column: .right),
+        ]
+        paragraphs[0].isTranslationPlaceholder = true
+        view.show(.paragraphs(paragraphs))
+        view.layout()
+        let blocks = document.subviews.compactMap { $0 as? NSTextView }
+        try #require(blocks.count == 2)
+        let frames = blocks.map(\.frame)
+
+        func textColor(_ block: NSTextView) -> NSColor? {
+            block.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        }
+        #expect(textColor(blocks[0]) == .secondaryLabelColor)
+        #expect(textColor(blocks[1]) == .labelColor)
+
+        paragraphs[0].translationPrefix = "译"
+        view.show(.paragraphs(paragraphs))
+        view.layout()
+        let overlay = try #require(document.subviews.compactMap { $0 as? NSTextView }.first { $0.string == "译" })
+        let source = blocks[0]
+        let layout = try #require(source.layoutManager)
+        let lastWord = ("First " as NSString).length
+        #expect(source.string == "First paragraph")
+        #expect(source.frame == overlay.frame)
+        #expect(textColor(source) == .secondaryLabelColor)
+        #expect(textColor(overlay) == .labelColor)
+        #expect(layout.temporaryAttribute(.foregroundColor, atCharacterIndex: 4, effectiveRange: nil) as? NSColor == .clear)
+        #expect(layout.temporaryAttribute(.foregroundColor, atCharacterIndex: lastWord, effectiveRange: nil) == nil)
+        let lastWordGlyph = layout.glyphIndexForCharacter(at: lastWord)
+        let lastWordPosition = layout.location(forGlyphAt: lastWordGlyph)
+
+        paragraphs[0].translationPrefix = "译文"
+        view.show(.paragraphs(paragraphs))
+        view.layout()
+        #expect(source.string == "First paragraph")
+        #expect(overlay.string == "译文")
+        #expect(layout.location(forGlyphAt: lastWordGlyph) == lastWordPosition)
+
+        paragraphs[0].translationPrefix = nil
+        paragraphs[0].isTranslationPlaceholder = false
+        view.show(.paragraphs(paragraphs))
+        view.layout()
+        let updated = document.subviews.compactMap { $0 as? NSTextView }
+        #expect(updated == blocks)
+        #expect(updated.map(\.frame) == frames)
+        #expect(updated.map(\.string) == paragraphs.map(\.text))
+        #expect(textColor(updated[0]) == .labelColor)
+    }
+
+    @Test func streamingUpdatesReplaceTheActiveLocalFade() async throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = BooksReadingMat(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        view.rightWidth = 320
+        let window = NSWindow(
+            contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.contentView = view
+        window.alphaValue = 0
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+
+        var paragraph = BooksParagraph(text: "Some source words stay visible", top: 24, height: 44)
+        paragraph.isTranslationPlaceholder = true
+        view.show(.paragraphs([paragraph]))
+        view.layout()
+        let reader = try #require(view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let document = try #require(reader.documentView)
+
+        func fades() -> [CALayer] {
+            document.subviews.flatMap { $0.layer?.sublayers ?? [] }
+                .filter { $0.animation(forKey: "replacement") != nil }
+        }
+        paragraph.translationPrefix = "译"
+        view.show(.paragraphs([paragraph]))
+        view.layout()
+        let initialFades = fades()
+        #expect(initialFades.count == 2)
+
+        paragraph.translationPrefix = "译文"
+        view.show(.paragraphs([paragraph]))
+        view.layout()
+        #expect(initialFades.allSatisfy { $0.superlayer == nil })
+        #expect(!fades().isEmpty)
+        let texts = document.subviews.compactMap { ($0 as? NSTextView)?.string }
+        #expect(texts.contains("译文"))
+
+        paragraph.text = "译文已完成。"
+        paragraph.translationPrefix = nil
+        paragraph.isTranslationPlaceholder = false
+        view.show(.paragraphs([paragraph]))
+        view.layout()
+        let blocks = document.subviews.compactMap { $0 as? NSTextView }
+        #expect(blocks.map(\.string) == ["译文已完成。"])
+        #expect(fades().isEmpty)
+        let finishing = try #require(blocks.first?.layer?.sublayers?.first {
+            $0.animation(forKey: "sourceCompletion") != nil
+        })
+        #expect(finishing.opacity == 0)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(finishing.superlayer == nil)
     }
 
     @Test func wideningSidebarRemovesTruncationWithoutMovingSourceAnchor() throws {

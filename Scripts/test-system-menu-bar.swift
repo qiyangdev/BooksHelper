@@ -62,14 +62,33 @@ func openLanguageMenu(from statusItem: AXUIElement) throws -> [AXUIElement] {
             children(of: menu).first { attribute(kAXTitleAttribute, on: $0) as? String == "Translation" }
         }
     }
-    let submenuLocation = try waitFor("The Translation submenu has no visible position.") { center(of: translation) }
-    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: submenuLocation, mouseButton: .left)?
-        .post(tap: .cghidEventTap)
-    return try waitFor("No languages appeared in the Translation submenu.") {
-        guard let submenu = children(of: translation).first else { return nil }
-        let choices = children(of: submenu)
-        guard choices.contains(where: { center(of: $0) != nil }) else { return nil }
-        return choices
+    let choices = try openSubmenu(translation, titled: "Translation")
+    guard let targets = choices.first(where: { attribute(kAXTitleAttribute, on: $0) as? String == "Translate To" }),
+          choices.contains(where: { attribute(kAXTitleAttribute, on: $0) as? String == "Engine" }) else {
+        throw TestFailure(message: "Translation did not contain Translate To and Engine as peer submenus.")
+    }
+    return try openSubmenu(targets, titled: "Translate To")
+}
+
+func openSubmenu(_ item: AXUIElement, titled title: String) throws -> [AXUIElement] {
+    let submenuLocation = try waitFor("The \(title) submenu has no visible position.") { center(of: item) }
+    var nextHover = 0.0
+    var offset: CGFloat = 0
+    return try waitFor("No menu items appeared in \(title).") {
+        if let submenu = children(of: item).first {
+            let choices = children(of: submenu)
+            if choices.contains(where: { center(of: $0) != nil }) { return choices }
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now >= nextHover {
+            // A deeper submenu can have AX bounds while its parent is still opening.
+            let point = CGPoint(x: submenuLocation.x, y: submenuLocation.y + offset)
+            CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+            offset = offset == 0 ? 1 : 0
+            nextHover = now + 0.35
+        }
+        return nil
     }
 }
 

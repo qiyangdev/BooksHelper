@@ -14,6 +14,9 @@ nonisolated struct BooksParagraph: Equatable, Sendable {
     }
 
     var text: String
+    var isTranslationPlaceholder = false
+    var showsTranslationShimmer = false
+    var translationPrefix: String?
     let position: Position
     let continuation: Position?
 
@@ -24,11 +27,16 @@ nonisolated struct BooksParagraph: Equatable, Sendable {
     }
 }
 
+nonisolated enum BooksSidebarMode: Int {
+    case translation, summary
+}
+
 nonisolated enum BooksPageContent: Equatable, Sendable {
     case loading
     case noText
     case paragraphs([BooksParagraph])
-    case translating
+    case summarizing
+    case summary(String)
     case translationUnavailable(String)
 }
 

@@ -32,6 +32,7 @@ final class BooksCompanionWindow: NSObject {
     private var timer: Timer?
     private var booksProcessID: pid_t?
     private var readingWindow: Int?
+    private var pageWindow: Int?
     private var nextPageRead = 0.0
     private var pageRead: Task<Void, Never>?
     private var pageContent: BooksPageContent = .loading
@@ -67,6 +68,8 @@ final class BooksCompanionWindow: NSObject {
         controlsPanel.acceptsMouseMovedEvents = true
         mat.onResize = { [weak self] delta in self?.resize(by: delta) }
         mat.onResizeEnded = { [weak self] in self?.finishResize() }
+        mat.onRetryTranslation = { [weak self] in self?.translation.retryTranslation() }
+        mat.onSelectMode = { [weak self] mode in self?.translation.selectMode(mode) }
         translation.installHost(in: mat)
         translation.onOutputChange = { [weak self] _ in self?.showTranslation() }
     }
@@ -88,7 +91,7 @@ final class BooksCompanionWindow: NSObject {
     }
 
 #if DEBUG
-    func startForUITests() {
+    func startForUITests(translationFailsOnce: Bool) {
         guard let screen = NSScreen.screens.first else { return }
         let visibleFrame = screen.visibleFrame
         let frame = CGRect(
@@ -110,7 +113,7 @@ final class BooksCompanionWindow: NSObject {
         window.contentView?.addSubview(columnsButton)
         fixtureWindow = window
         window.orderFrontRegardless()
-        translation.startForUITests()
+        translation.startForUITests(failFirstRequest: translationFailsOnce)
         pageContent = fixturePage(isTwoColumn: false).content
         let windowFrame = window.frame
         let quartzFrame = CGRect(
@@ -197,23 +200,25 @@ final class BooksCompanionWindow: NSObject {
 
     private func update() {
         let screens = NSScreen.screens
-        guard let books = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.iBooksX").first,
-              !books.isHidden,
-              let primaryScreen = screens.first,
+        let books = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.iBooksX").first
+        if booksProcessID != books?.processIdentifier {
+            booksProcessID = books?.processIdentifier
+            readingWindow = nil
+            pageWindow = nil
+            isTwoColumn = false
+            twoColumnWidthOverride = nil
+            invalidatePage()
+            translation.update(nil)
+        }
+        guard let books, !books.isHidden, let primaryScreen = screens.first,
               let windows = CGWindowListCopyWindowInfo(
                 [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
               ) as? [[String: Any]] else {
-            booksProcessID = nil
             readingWindow = nil
             hidePanel()
             return
         }
 
-        if booksProcessID != books.processIdentifier {
-            booksProcessID = books.processIdentifier
-            readingWindow = nil
-            nextPageRead = 0
-        }
         let candidates = windows.compactMap { window -> BooksWindowCandidate? in
             guard window[kCGWindowOwnerPID as String] as? pid_t == books.processIdentifier,
                   window[kCGWindowLayer as String] as? Int == 0,
@@ -443,9 +448,13 @@ final class BooksCompanionWindow: NSObject {
             case .readingWindow(let number, let page):
                 if readingWindow != number {
                     readingWindow = number
-                    isTwoColumn = false
-                    twoColumnWidthOverride = nil
-                    pageContent = .loading
+                    if let pageWindow, pageWindow != number {
+                        self.pageWindow = nil
+                        isTwoColumn = false
+                        twoColumnWidthOverride = nil
+                        translation.update(nil)
+                    }
+                    invalidatePage()
                     refreshContent()
                 }
                 if placement?.windowNumber == number, mat.hasRoomForText, let page {
@@ -461,6 +470,7 @@ final class BooksCompanionWindow: NSObject {
     }
 
     private func setReadingPage(_ page: BooksReadingPage) {
+        pageWindow = readingWindow
         pageContent = page.content
         if let layout = page.isTwoColumn, layout != isTwoColumn {
             isTwoColumn = layout
@@ -473,21 +483,23 @@ final class BooksCompanionWindow: NSObject {
     }
 
     private func refreshContent() {
-        if transition == nil {
-            translation.update(placement != nil && mat.hasRoomForText ? pageContent : nil)
+        if placement != nil, transition == nil, mat.hasRoomForText {
+            translation.update(pageContent)
         }
         showTranslation()
     }
 
     private func showTranslation() {
-        mat.show(placement != nil && transition == nil && mat.hasRoomForText ? translation.output : nil)
+        let visible = placement != nil && transition == nil && mat.hasRoomForText
+        let content: BooksPageContent? = pageContent == .loading ? .loading : translation.output
+        mat.show(visible ? content : nil)
     }
 
     private func hidePanel() {
+        if placement != nil { invalidatePage() }
         stopTrackingDrag()
         stopTransition()
         placement = nil
-        translation.update(nil)
         mat.endInteraction()
         if controlsPanel.isVisible { controlsPanel.orderOut(nil) }
         if panel.isVisible { panel.orderOut(nil) }

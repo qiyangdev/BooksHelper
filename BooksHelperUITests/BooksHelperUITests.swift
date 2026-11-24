@@ -13,6 +13,9 @@ final class BooksHelperUITests: XCTestCase {
         XCTAssertTrue(chinese.waitForExistence(timeout: 5))
 
         app.buttons["Translation"].click()
+        let targets = app.menuItems["Translate To"].firstMatch
+        XCTAssertTrue(targets.waitForExistence(timeout: 5))
+        targets.hover()
         let japaneseTitle = Locale.current.localizedString(forIdentifier: "ja") ?? "ja"
         let japaneseItem = app.menuItems[japaneseTitle].firstMatch
         XCTAssertTrue(japaneseItem.waitForExistence(timeout: 5))
@@ -20,6 +23,30 @@ final class BooksHelperUITests: XCTestCase {
 
         XCTAssertTrue(japanese.waitForExistence(timeout: 5))
         XCTAssertFalse(chinese.exists)
+    }
+
+    @MainActor
+    func testOllamaModelPickerUpdatesTheSidebar() {
+        let app = launchFixture()
+        let menu = app.buttons["Translation"]
+        menu.click()
+        XCTAssertFalse(app.menuItems["Model"].exists)
+        let engine = app.menuItems["Engine"].firstMatch
+        XCTAssertTrue(engine.waitForExistence(timeout: 5))
+        engine.hover()
+        let ollama = app.menuItems["Ollama"].firstMatch
+        XCTAssertTrue(ollama.waitForExistence(timeout: 5))
+        ollama.click()
+        XCTAssertTrue(translation("Ollama fixture translation", in: app).waitForExistence(timeout: 5))
+
+        menu.click()
+        let models = app.menuItems["Model"].firstMatch
+        XCTAssertTrue(models.waitForExistence(timeout: 5))
+        models.hover()
+        let second = app.menuItems["second-fixture:4b"].firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        second.click()
+        XCTAssertTrue(translation("second-fixture:4b translation", in: app).waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -77,9 +104,21 @@ final class BooksHelperUITests: XCTestCase {
     }
 
     @MainActor
-    private func launchFixture() -> XCUIApplication {
+    func testRetryingFromTheUnavailableViewRestoresTheTranslation() {
+        let app = launchFixture(arguments: ["--ui-test-translation-failure"])
+        let retry = app.buttons["Retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Fixture translation failed."].exists)
+
+        retry.click()
+        XCTAssertTrue(translation("Chinese fixture translation", in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(retry.exists)
+    }
+
+    @MainActor
+    private func launchFixture(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-test-fixture"]
+        app.launchArguments = ["--ui-test-fixture"] + arguments
         app.launch()
         return app
     }
