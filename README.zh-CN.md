@@ -4,11 +4,15 @@
 
 BooksHelper 是一款 macOS 菜单栏应用。它在 Apple Books 阅读窗口旁显示译文或简短总结，跟随你翻页，并使用你选择的目标语言。
 
+![Apple Books 阅读窗口与 BooksHelper 翻译侧栏](docs/images/bookshelper-translation-sidebar.png)
+
 ## 使用要求
 
-- macOS 27.2 或更高版本。
+- 当前构建要求 macOS 27.2 或更高版本。
 - 辅助功能权限，用于读取 Apple Books 当前页的文本和排版位置。
 - 总结和 Ollama 翻译需要运行中的 Ollama 服务和已安装的文本模型。BooksHelper 通过 `127.0.0.1:11434` 连接本机 Ollama。
+
+源码也可以将部署目标设为 macOS 26.0 后编译。若要为 macOS 15 构建，需要给两个在 macOS 26 引入的系统翻译错误码加上版本判断。Apple Books 集成尚未在这两个较早版本上实测。
 
 ## 安装
 

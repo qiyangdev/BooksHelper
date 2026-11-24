@@ -4,11 +4,15 @@
 
 BooksHelper is a menu bar app for macOS that adds a sidebar to Apple Books. It follows the page you are reading and shows a translation or a short summary in your chosen language.
 
+![Apple Books with the BooksHelper translation sidebar](docs/images/bookshelper-translation-sidebar.png)
+
 ## Requirements
 
-- macOS 27.2 or later.
+- macOS 27.2 or later for the current build.
 - Accessibility permission so BooksHelper can read the text and layout of the current page in Apple Books.
 - A running Ollama server and an installed text model for summaries and Ollama translations. BooksHelper connects to Ollama at `127.0.0.1:11434`.
+
+The source also builds with macOS 26.0 as the deployment target. Building for macOS 15 requires version checks for two System Translation error codes added in macOS 26. Apple Books integration has yet to be tested on either older version.
 
 ## Install
 
