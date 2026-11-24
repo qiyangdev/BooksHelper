@@ -53,3 +53,7 @@ The UI tests use a sample reading page and sample translations. To test the real
 swift Scripts/test-system-menu-bar.swift \
   /tmp/books-helper-validation/Build/Products/Debug/BooksHelper.app
 ```
+
+## License
+
+BooksHelper's source code is available under the [MIT License](LICENSE). Third-party material shown in screenshots remains subject to its own rights.

@@ -53,3 +53,7 @@ xcodebuild -project BooksHelper.xcodeproj -scheme BooksHelper \
 swift Scripts/test-system-menu-bar.swift \
   /tmp/books-helper-validation/Build/Products/Debug/BooksHelper.app
 ```
+
+## 许可证
+
+BooksHelper 源码采用 [MIT 许可证](LICENSE)。截图中的第三方素材仍适用各自的权利条款。
